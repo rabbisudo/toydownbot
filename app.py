@@ -18,7 +18,7 @@ user_locks = {}
 def home():
     return "✅ Instagram Reel Downloader Bot is running!"
 
-@flask_app.route("/status")
+@flask_app.route("/health")
 def status():
     return "📡 Bot Status: Running"
 
