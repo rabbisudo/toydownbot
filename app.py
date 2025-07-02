@@ -1,17 +1,33 @@
 from pyrogram import Client, filters
 import httpx
 import time
+import threading
+from flask import Flask
 
 API_ID = 26257385
 API_HASH = "bbd0c7447894542d6e6a5531af44d0b5"
 BOT_TOKEN = "7961702167:AAHS7llSVZ8i4XH-_h9ULm3tFQS9MkHjU9I"
-ADMIN_ID = 6355601354  # 🟡 Replace with your own Telegram user ID
+ADMIN_ID = 6355601354
 
 app = Client("insta_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+flask_app = Flask(__name__)
 
 API_ENDPOINT = "https://tele-social.vercel.app/down?url="
 user_locks = {}
 
+# ==================== Flask API ====================
+@flask_app.route("/")
+def home():
+    return "✅ Instagram Reel Downloader Bot is running!"
+
+@flask_app.route("/status")
+def status():
+    return "📡 Bot Status: Running"
+
+def run_flask():
+    flask_app.run(host="0.0.0.0", port=8080)
+
+# ================ Pyrogram Bot Logic ================
 def progress_bar(percent):
     done = int(percent / 5)
     return "▓" * done + "░" * (20 - done)
@@ -40,14 +56,14 @@ async def start_handler(client, message):
         "👋 Hi! I'm your Instagram Reel Downloader Bot.\n\n"
         "Send me an Instagram reel URL using the command:\n"
         "`/ig <Instagram URL>`\n\n"
-        "I'll fetch and send you the video directly here!"
-        , parse_mode="markdown"
+        "I'll fetch and send you the video directly here!",
+        parse_mode="markdown"
     )
 
 @app.on_message(filters.command("ig") & (filters.private | filters.group))
 async def download_instagram_video(client, message):
     user_id = message.from_user.id
-    video_url = None  # Pre-define to avoid UnboundLocalError later
+    video_url = None
 
     if user_id in user_locks:
         await message.reply("⏳ Please wait until your current download is complete.")
@@ -108,10 +124,13 @@ async def download_instagram_video(client, message):
     finally:
         user_locks.pop(user_id, None)
 
+# =================== Main ===================
 if __name__ == "__main__":
+    threading.Thread(target=run_flask).start()
+    print("🌐 Flask server started at http://localhost:8080")
+
+    print("🤖 Bot is running...")
     try:
-        print("🤖 Bot is running...")
         app.run()
-        app.send_message(ADMIN_ID, "✅ Bot started successfully and is now running.")
     except Exception as e:
-        print(f"❌ Bot crashed: {e}\nRestarting...")
+        print(f"❌ Bot crashed: {e}")
