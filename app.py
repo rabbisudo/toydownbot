@@ -1,6 +1,5 @@
 from pyrogram import Client, filters
 import httpx
-import os
 import time
 
 API_ID = 26257385
