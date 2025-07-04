@@ -163,6 +163,8 @@ def download_youtube_video(message):
             res = client.get(API_ENDPOINT + url)
             data = res.json()
 
+        print("API response:", data)
+
         if not data.get("status"):
             raise Exception("API returned no valid video")
 
@@ -173,6 +175,9 @@ def download_youtube_video(message):
         with httpx.Client(follow_redirects=True, timeout=20) as client:
             final_response = client.head(initial_url)
             final_url = str(final_response.url)
+
+        print("Initial URL:", initial_url)
+        print("Final Direct URL:", final_url)
 
         video_url = final_url
 
