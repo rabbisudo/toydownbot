@@ -4,8 +4,6 @@ import time
 import threading
 import os
 from flask import Flask
-from yt_dlp import YoutubeDL
-
 
 API_TOKEN = "7961702167:AAHS7llSVZ8i4XH-_h9ULm3tFQS9MkHjU9I"
 ADMIN_ID = 6355601354
@@ -68,37 +66,28 @@ def start_handler(message):
         "👋 Hi! I'm your Instagram & YouTube Downloader Bot.\n\n"
         "Send me a video link using:\n"
         "📸 `/ig <Instagram URL>`\n"
-        "▶️ `/yt <YouTube Shorts/Video URL>`\n\n"
+        "▶️ `/yt <YouTube URL>`\n\n"
         "I'll fetch and send you the video directly here!"
     )
 
 @bot.message_handler(commands=['ig'])
 def download_instagram_video(message):
     user_id = message.from_user.id
-
     if user_id in user_locks:
         bot.reply_to(message, "⏳ Please wait until your current download is complete.")
         return
 
     parts = message.text.split()
-    url = None
+    url = parts[1] if len(parts) >= 2 else (
+        message.reply_to_message.text.strip() if message.reply_to_message and message.reply_to_message.text else None
+    )
 
-    # Case 1: URL in command (/ig <url>)
-    if len(parts) >= 2:
-        url = parts[1]
-
-    # Case 2: Replied message contains URL
-    elif message.reply_to_message and message.reply_to_message.text:
-        url = message.reply_to_message.text.strip()
-
-    if not url or "http" not in url:
-        bot.reply_to(message, "❗ Usage: /ig <Instagram URL>")
+    if not url or "instagram.com" not in url:
+        bot.reply_to(message, "❗ Please provide a valid Instagram URL.\nUsage: /ig <Instagram URL>")
         return
 
     status_msg = bot.reply_to(message, "🔍 Searching the video...")
-
     user_locks[user_id] = True
-    video_url = None
     filename = f"ig_video_{user_id}.mp4"
 
     try:
@@ -139,11 +128,11 @@ def download_instagram_video(message):
 
     except Exception as e:
         bot.edit_message_text(
-            f"⚠️ An error occurred.\n{'Here is the link:\n' + video_url if video_url else ''}\n\nError: `{e}`",
+            f"⚠️ An error occurred.\n\nError: `{e}`",
             message.chat.id,
-            status_msg.message_id
+            status_msg.message_id,
+            parse_mode="Markdown"
         )
-
     finally:
         user_locks.pop(user_id, None)
         if os.path.exists(filename):
@@ -152,52 +141,57 @@ def download_instagram_video(message):
 @bot.message_handler(commands=['yt'])
 def download_youtube_video(message):
     user_id = message.from_user.id
-
     if user_id in user_locks:
         bot.reply_to(message, "⏳ Please wait until your current download is complete.")
         return
 
     parts = message.text.split()
-    url = None
+    url = parts[1] if len(parts) >= 2 else (
+        message.reply_to_message.text.strip() if message.reply_to_message and message.reply_to_message.text else None
+    )
 
-    # Case 1: URL in command (/yt <url>)
-    if len(parts) >= 2:
-        url = parts[1]
-
-    # Case 2: Replied message contains URL
-    elif message.reply_to_message and message.reply_to_message.text:
-        url = message.reply_to_message.text.strip()
-
-    if not url or "http" not in url:
-        bot.reply_to(message, "❗ Usage: /yt <YouTube URL>")
+    if not url or not any(domain in url for domain in ["youtube.com", "youtu.be"]):
+        bot.reply_to(message, "❗ Please provide a valid YouTube video or Shorts URL.\nUsage: /yt <YouTube URL>")
         return
 
-    status_msg = bot.reply_to(message, "🔍 Processing the YouTube video...")
-
+    status_msg = bot.reply_to(message, "🔍 Fetching the YouTube video...")
     user_locks[user_id] = True
     filename = f"yt_video_{user_id}.mp4"
 
-    download_info = {"status_msg": status_msg, "start_time": time.time(), "filename": filename}
-
-    def yt_progress_hook(d):
-        if d['status'] == 'downloading':
-            downloaded_bytes = d.get('downloaded_bytes', 0)
-            total_bytes = d.get('total_bytes', d.get('total_bytes_estimate', 0))
-            if total_bytes > 0:
-                upload_progress(downloaded_bytes, total_bytes, download_info["status_msg"], download_info["start_time"])
-
     try:
-        ydl_opts = {
-            'outtmpl': filename,
-            'format': 'mp4',
-            'merge_output_format': 'mp4',
-            'quiet': True,
-            'progress_hooks': [yt_progress_hook],
-        }
+        with httpx.Client(timeout=30) as client:
+            res = client.get(API_ENDPOINT + url)
+            data = res.json()
 
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            title = info.get("title", "🎬 Here's your video!")
+        if not data.get("status"):
+            raise Exception("API returned no valid video")
+
+        initial_url = data.get("video")
+        title = data.get("title", "🎬 Here's your video!")
+
+        # 🔁 Resolve redirect to final URL
+        with httpx.Client(follow_redirects=True, timeout=20) as client:
+            final_response = client.head(initial_url)
+            final_url = str(final_response.url)
+
+        video_url = final_url
+
+        bot.edit_message_text("✅ Found! Downloading...", message.chat.id, status_msg.message_id)
+
+        start_time = time.time()
+        last_update = time.time()
+
+        with httpx.stream("GET", video_url, timeout=60) as r:
+            with open(filename, "wb") as f:
+                total = int(r.headers.get("content-length", 0))
+                current = 0
+                for chunk in r.iter_bytes():
+                    f.write(chunk)
+                    current += len(chunk)
+                    now = time.time()
+                    if now - last_update > 2:
+                        upload_progress(current, total, status_msg, start_time)
+                        last_update = now
 
         bot.send_video(
             chat_id=message.chat.id,
@@ -210,12 +204,11 @@ def download_youtube_video(message):
 
     except Exception as e:
         bot.edit_message_text(
-            f"⚠️ An error occurred while downloading.\n\nError: `{str(e)}`",
+            f"⚠️ An error occurred.\n\nError: `{e}`",
             message.chat.id,
             status_msg.message_id,
             parse_mode="Markdown"
         )
-
     finally:
         user_locks.pop(user_id, None)
         if os.path.exists(filename):
