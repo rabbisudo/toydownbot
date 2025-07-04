@@ -82,9 +82,8 @@ def download_instagram_video(message):
         message.reply_to_message.text.strip() if message.reply_to_message and message.reply_to_message.text else None
     )
 
-    # Strict Instagram link validation
-    if not url or not any(x in url for x in ["instagram.com", "instagr.am"]):
-        bot.reply_to(message, "❌ Invalid Instagram URL.\nPlease send only Instagram video/reel links.\nExample: https://www.instagram.com/reel/...")
+    if not url or "instagram.com" not in url:
+        bot.reply_to(message, "❗ Please provide a valid Instagram URL.\nUsage: /ig <Instagram URL>")
         return
 
     status_msg = bot.reply_to(message, "🔍 Searching the video...")
@@ -107,10 +106,8 @@ def download_instagram_video(message):
         last_update = time.time()
 
         with httpx.stream("GET", video_url, timeout=60) as r:
-            total = int(r.headers.get("content-length", 0))
-            if total == 0:
-                raise Exception("Received empty content.")
             with open(filename, "wb") as f:
+                total = int(r.headers.get("content-length", 0))
                 current = 0
                 for chunk in r.iter_bytes():
                     f.write(chunk)
@@ -120,20 +117,12 @@ def download_instagram_video(message):
                         upload_progress(current, total, status_msg, start_time)
                         last_update = now
 
-        if os.path.exists(filename) and os.path.getsize(filename) > 0:
-            with open(filename, "rb") as video_file:
-                bot.send_video(
-                    chat_id=message.chat.id,
-                    video=video_file,
-                    caption="🎬 Here's your Instagram reel!",
-                    reply_to_message_id=message.id
-                )
-        else:
-            bot.edit_message_text(
-                "⚠️ Download failed. The video file is empty or corrupted.",
-                message.chat.id,
-                status_msg.message_id
-            )
+        bot.send_video(
+            chat_id=message.chat.id,
+            video=open(filename, "rb"),
+            caption="🎬 Here's your Instagram reel!",
+            reply_to_message_id=message.id
+        )
 
         bot.delete_message(message.chat.id, status_msg.message_id)
 
@@ -141,7 +130,8 @@ def download_instagram_video(message):
         bot.edit_message_text(
             f"⚠️ An error occurred.\n\nError: `{e}`",
             message.chat.id,
-            status_msg.message_id
+            status_msg.message_id,
+            parse_mode="Markdown"
         )
     finally:
         user_locks.pop(user_id, None)
@@ -160,9 +150,8 @@ def download_youtube_video(message):
         message.reply_to_message.text.strip() if message.reply_to_message and message.reply_to_message.text else None
     )
 
-    # Strict YouTube link validation
-    if not url or not any(x in url for x in ["youtube.com", "youtu.be"]):
-        bot.reply_to(message, "❌ Invalid YouTube URL.\nPlease send only YouTube video or Shorts links.\nExample: https://youtu.be/...")
+    if not url or not any(domain in url for domain in ["youtube.com", "youtu.be"]):
+        bot.reply_to(message, "❗ Please provide a valid YouTube video or Shorts URL.\nUsage: /yt <YouTube URL>")
         return
 
     status_msg = bot.reply_to(message, "🔍 Fetching the YouTube video...")
@@ -174,27 +163,32 @@ def download_youtube_video(message):
             res = client.get(API_ENDPOINT + url)
             data = res.json()
 
+        print("API response:", data)
+
         if not data.get("status"):
             raise Exception("API returned no valid video")
 
         initial_url = data.get("video")
         title = data.get("title", "🎬 Here's your video!")
 
+        # 🔁 Resolve redirect to final URL
         with httpx.Client(follow_redirects=True, timeout=20) as client:
             final_response = client.head(initial_url)
             final_url = str(final_response.url)
 
+        print("Initial URL:", initial_url)
+        print("Final Direct URL:", final_url)
+
         video_url = final_url
+
         bot.edit_message_text("✅ Found! Downloading...", message.chat.id, status_msg.message_id)
 
         start_time = time.time()
         last_update = time.time()
 
         with httpx.stream("GET", video_url, timeout=60) as r:
-            total = int(r.headers.get("content-length", 0))
-            if total == 0:
-                raise Exception("Received empty content.")
             with open(filename, "wb") as f:
+                total = int(r.headers.get("content-length", 0))
                 current = 0
                 for chunk in r.iter_bytes():
                     f.write(chunk)
@@ -204,20 +198,12 @@ def download_youtube_video(message):
                         upload_progress(current, total, status_msg, start_time)
                         last_update = now
 
-        if os.path.exists(filename) and os.path.getsize(filename) > 0:
-            with open(filename, "rb") as video_file:
-                bot.send_video(
-                    chat_id=message.chat.id,
-                    video=video_file,
-                    caption=title,
-                    reply_to_message_id=message.id
-                )
-        else:
-            bot.edit_message_text(
-                "⚠️ Download failed. The video file is empty or corrupted.",
-                message.chat.id,
-                status_msg.message_id
-            )
+        bot.send_video(
+            chat_id=message.chat.id,
+            video=open(filename, "rb"),
+            caption=title,
+            reply_to_message_id=message.id
+        )
 
         bot.delete_message(message.chat.id, status_msg.message_id)
 
@@ -225,7 +211,8 @@ def download_youtube_video(message):
         bot.edit_message_text(
             f"⚠️ An error occurred.\n\nError: `{e}`",
             message.chat.id,
-            status_msg.message_id
+            status_msg.message_id,
+            parse_mode="Markdown"
         )
     finally:
         user_locks.pop(user_id, None)
