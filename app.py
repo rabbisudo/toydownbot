@@ -5,7 +5,7 @@ import threading
 import os
 from flask import Flask
 
-API_TOKEN = "7961702167:AAHS7llSVZ8i4XH-_h9ULm3tFQS9MkHjU9I"
+API_TOKEN = "7961702167:AAEbya7A9IyI4bZgTBUiENFkybtsS8aCsQo"
 ADMIN_ID = 6355601354
 
 bot = telebot.TeleBot(API_TOKEN, parse_mode="Markdown")
