@@ -1,2 +1,26 @@
+# Environment variables
 .env
+
+# Session files
+*.session
 .toydownbot.session
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+env/
+venv/
+.venv/
+
+# Media files (Temporary downloads)
+*.mp4
+*.jpg
+*.jpeg
+*.png
+*.m3u8
+*.ts
+*.dts
+
+# Logs
+*.log
