@@ -443,7 +443,8 @@ async def afs_link_handler(client, message: Message):
             "--referer", referer,
             "--user-agent", "Mozilla/5.0",
             "--add-header", "Origin: https://iframe.mediadelivery.net",
-            "--no-check-certificate"
+            "--no-check-certificate",
+            "--downloader-args", "ffmpeg:-allowed_segment_extensions ALL"
         ]
         cmd.append(url)
         

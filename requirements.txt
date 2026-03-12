@@ -5,3 +5,4 @@ m3u8==6.0.0
 yt-dlp==2026.3.3
 TgCrypto
 python-dotenv
+pycryptodomex
