@@ -105,6 +105,86 @@ async def get_video_metadata(filepath):
     except Exception:
         return None, None, None
 
+def parse_yt_dlp_progress(line):
+    import re
+    if "[download]" not in line:
+        return None
+        
+    percent_match = re.search(r"(\d+\.\d+)%", line)
+    if not percent_match:
+        return None
+        
+    percent = float(percent_match.group(1))
+    size_match = re.search(r"of\s+~?([\d\.\w]+)", line)
+    speed_match = re.search(r"at\s+([\d\.\w/s]+)", line)
+    eta_match = re.search(r"ETA\s+([\d:]+)", line)
+    
+    return {
+        "percent": percent,
+        "size": size_match.group(1) if size_match else "Unknown",
+        "speed": speed_match.group(1) if speed_match else "N/A",
+        "eta": eta_match.group(1) if eta_match else "N/A"
+    }
+
+async def download_with_progress(cmd, message, status_msg):
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    
+    last_update_time = 0
+    buffer = ""
+    
+    # Read stdout in chunks to avoid LimitOverrunError (Separator not found)
+    while True:
+        chunk = await process.stdout.read(4096)
+        if not chunk:
+            break
+            
+        buffer += chunk.decode(errors="ignore")
+        
+        # yt-dlp uses \r for progress updates on the same line
+        while "\n" in buffer or "\r" in buffer:
+            n_pos = buffer.find("\n")
+            r_pos = buffer.find("\r")
+            
+            if n_pos != -1 and r_pos != -1:
+                pos = min(n_pos, r_pos)
+            else:
+                pos = max(n_pos, r_pos)
+                
+            line = buffer[:pos]
+            buffer = buffer[pos+1:]
+                
+            line = line.strip()
+            if not line:
+                continue
+                
+            progress = parse_yt_dlp_progress(line)
+            if progress and time.time() - last_update_time > 4:
+                percent = progress["percent"]
+                bar = progress_bar(percent)
+                
+                size_text = f"📶 <b>Size:</b> {progress['size']}\n" if progress['size'] != "Unknown" else ""
+                
+                status_text = (
+                    f"<b>📥 Downloading...</b>\n\n"
+                    f"{bar}\n\n"
+                    f"🚧 <b>Progress:</b> {percent:.1f}%\n"
+                    f"⚡️ <b>Speed:</b> {progress['speed']}\n"
+                    f"⏳ <b>ETA:</b> {progress['eta']}\n"
+                    f"{size_text}"
+                )
+                try:
+                    await status_msg.edit_text(status_text, parse_mode=ParseMode.HTML)
+                    last_update_time = time.time()
+                except Exception:
+                    pass
+
+    await process.wait()
+    return process.returncode, await process.stderr.read()
+
 async def get_bunny_m3u8(url):
     try:
         # Use yt-dlp to get the direct URL
@@ -233,40 +313,30 @@ async def download_youtube_video(client, message: Message):
     thumb_name = f"yt_thumb_{user_id}_{int(time.time())}.jpg"
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client_http:
-            res = await client_http.get(API_ENDPOINT + url)
-            data = res.json()
-
-        if not data.get("status"):
-            raise Exception("API returned no valid video")
-
-        initial_url = data.get("video")
-        thumbnail_url = data.get("thumb") or data.get("thumbnail")
-        title = data.get("title", "🎬 Here's your video!")
-
-        async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client_redir:
-            final_response = await client_redir.head(initial_url)
-            video_url = str(final_response.url)
-
-        # Download thumbnail if available
-        if thumbnail_url:
-            async with httpx.AsyncClient(timeout=20) as client_dl:
-                r_thumb = await client_dl.get(thumbnail_url)
-                if r_thumb.status_code == 200:
-                    with open(thumb_name, "wb") as f:
-                        f.write(r_thumb.content)
-                else:
-                    thumb_name = None
-        else:
-            thumb_name = None
-
+        title = "YouTube Video"
         await status_msg.edit_text("<emoji id=5429381339851796035>✅</emoji> Found! Downloading to server...", parse_mode=ParseMode.HTML)
 
-        async with httpx.AsyncClient(timeout=60) as client_dl:
-            async with client_dl.stream("GET", video_url) as r:
-                with open(filename, "wb") as f:
-                    async for chunk in r.aiter_bytes():
-                        f.write(chunk)
+        # Use yt-dlp for robust YouTube downloads
+        cmd = [
+            "yt-dlp",
+            "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+            "-o", filename,
+            "--no-playlist",
+            "--merge-output-format", "mp4",
+            "--no-check-certificate"
+        ]
+        cmd.append(url)
+        
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0 or not os.path.exists(filename):
+            await status_msg.edit_text(f"<emoji id=5274099962655816924>❌</emoji> <b>Failed to download video!</b>\n\nPlease check the link and try again.", parse_mode=ParseMode.HTML)
+            return
 
         await status_msg.edit_text("<emoji id=5449683594425410231>📤</emoji> Uploading to Telegram...", parse_mode=ParseMode.HTML)
         
@@ -407,7 +477,7 @@ async def afs_link_handler(client, message: Message):
 
     parts = message.text.split()
     url = None
-    referer = "https://iframe.mediadelivery.net/"
+    referer = "https://iframe.mediadelivery.net"
     
     if len(parts) >= 2:
         url = parts[1]
@@ -431,8 +501,50 @@ async def afs_link_handler(client, message: Message):
     status_msg = await message.reply_text("<emoji id=5231012545799666522>🔍</emoji> Processing AFS video...", parse_mode=ParseMode.HTML)
     user_locks[user_id] = True
     filename = f"afs_video_{user_id}_{int(time.time())}.mp4"
+    thumb_name = None
+    title = "AFS Video"
     
     try:
+        # Fetch metadata using yt-dlp
+        metadata_cmd = [
+            "yt-dlp",
+            "--dump-json",
+            "--referer", referer,
+            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "--add-header", "Origin: https://iframe.mediadelivery.net",
+            "--add-header", "Accept: */*",
+            "--add-header", "Accept-Language: en-US,en;q=0.9",
+            "--add-header", "Sec-Fetch-Site: cross-site",
+            "--add-header", "Sec-Fetch-Mode: cors",
+            "--no-check-certificate",
+            url
+        ]
+        
+        process_meta = await asyncio.create_subprocess_exec(
+            *metadata_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout_meta, stderr_meta = await process_meta.communicate()
+        
+        if process_meta.returncode == 0:
+            try:
+                metadata = json.loads(stdout_meta.decode())
+                title = metadata.get("title", "AFS Video")
+                thumbnail_url = metadata.get("thumbnail")
+                
+                if thumbnail_url:
+                    thumb_name = f"afs_thumb_{user_id}_{int(time.time())}.jpg"
+                    async with httpx.AsyncClient(timeout=20) as client_dl:
+                        r_thumb = await client_dl.get(thumbnail_url)
+                        if r_thumb.status_code == 200:
+                            with open(thumb_name, "wb") as f:
+                                f.write(r_thumb.content)
+                        else:
+                            thumb_name = None
+            except Exception:
+                pass
+
         # Construct yt-dlp command with dedicated referer and user-agent flags
         cmd = [
             "yt-dlp",
@@ -441,25 +553,24 @@ async def afs_link_handler(client, message: Message):
             "--no-playlist",
             "--merge-output-format", "mp4",
             "--referer", referer,
-            "--user-agent", "Mozilla/5.0",
+            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "--add-header", "Origin: https://iframe.mediadelivery.net",
+            "--add-header", "Accept: */*",
+            "--add-header", "Accept-Language: en-US,en;q=0.9",
+            "--add-header", "Sec-Fetch-Site: cross-site",
+            "--add-header", "Sec-Fetch-Mode: cors",
             "--no-check-certificate",
-            "--downloader-args", "ffmpeg:-allowed_segment_extensions ALL"
+            "--downloader-args", "ffmpeg:-allowed_segment_extensions ALL",
+            "--concurrent-fragments", "10"
         ]
         cmd.append(url)
         
         await status_msg.edit_text("<emoji id=5429381339851796035>✅</emoji> Found! Downloading to server...", parse_mode=ParseMode.HTML)
         
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
+        returncode, stderr = await download_with_progress(cmd, message, status_msg)
         
-        if process.returncode != 0 or not os.path.exists(filename):
-            error_log = stderr.decode() if stderr else "yt-dlp error"
-            await status_msg.edit_text(f"<emoji id=5274099962655816924>❌</emoji> Failed to download video with yt-dlp.\n\n<code>{error_log[:500]}</code>", parse_mode=ParseMode.HTML)
+        if returncode != 0 or not os.path.exists(filename):
+            await status_msg.edit_text(f"<emoji id=5274099962655816924>❌</emoji> <b>Download failed!</b>\n\nThe video might be restricted or inaccessible.", parse_mode=ParseMode.HTML)
             return
 
         await status_msg.edit_text("<emoji id=5449683594425410231>📤</emoji> Uploading to Telegram...", parse_mode=ParseMode.HTML)
@@ -467,7 +578,7 @@ async def afs_link_handler(client, message: Message):
         width, height, duration = await get_video_metadata(filename)
         user_name = message.from_user.first_name or message.from_user.username or "User"
         rich_caption = (
-            f"<emoji id=5463107823946717464>🎬</emoji> <b>AFS Video Downloaded</b>\n"
+            f"<emoji id=5463107823946717464>🎬</emoji> <b>Title:</b> <code>{title}</code>\n"
             f"<emoji id=5251203410396458957>👤</emoji> <b>Downloaded by:</b> <a href='tg://user?id={user_id}'>{user_name}</a>"
         )
 
@@ -475,6 +586,7 @@ async def afs_link_handler(client, message: Message):
         await client.send_video(
             chat_id=message.chat.id,
             video=filename,
+            thumb=thumb_name,
             caption=rich_caption,
             parse_mode=ParseMode.HTML,
             duration=duration,
