@@ -1,5 +1,8 @@
 import os
 import time
+from dotenv import load_dotenv
+
+load_dotenv()
 import asyncio
 import threading
 import httpx
@@ -12,9 +15,10 @@ from pyrogram.types import Message
 
 # =================== Configuration ===================
 # Get these from https://my.telegram.org
-API_ID = os.environ.get("API_ID", "25149955")  # Replace with your API ID
-API_HASH = os.environ.get("API_HASH", "ea43d8e5144110f060e48516b4066ba1")  # Replace with your API HASH
-BOT_TOKEN = "7744620277:AAFzNwd1yk3NPuQ-U42dHH-ZLgMMW6_W0mU"
+# Get these from https://my.telegram.org
+API_ID = os.environ.get("API_ID")
+API_HASH = os.environ.get("API_HASH")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 app = Client("toydownbot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 flask_app = Flask(__name__)
@@ -36,7 +40,8 @@ def health_check():
     return "OK", 200
 
 def run_flask():
-    flask_app.run(host="0.0.0.0", port=8080)
+    port = int(os.environ.get("PORT", 8080))
+    flask_app.run(host="0.0.0.0", port=port)
 
 # =================== Progress ===================
 def progress_bar(percent):
